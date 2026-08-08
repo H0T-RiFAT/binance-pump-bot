@@ -9,13 +9,13 @@ TELEGRAM_CHAT_ID = "8825999665"
 # Scan Parameters
 TIMEFRAME = '1m'
 MA_PERIOD = 20
-TOP_N_COINS = 50            # Reduced to 50 top liquid pairs to prevent IP Ban on Render
-MIN_SPIKE_MULTIPLIER = 15.0
+TOP_N_COINS = 50            # Binance Top 50 pairs to respect Render IP limits
+MIN_SPIKE_MULTIPLIER = 5.0  # Video Strategy: Catching early spikes starting from 5x
 
-# Binance Futures Setup with Custom Headers to Avoid Cloud Bans
+# Binance Futures Setup
 exchange = ccxt.binance({
     'enableRateLimit': True,
-    'rateLimit': 1500,       # Added extra safety rate limit delay (1.5s)
+    'rateLimit': 1500,
     'options': {'defaultType': 'future'},
     'headers': {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -48,31 +48,31 @@ def get_binance_top_coins(limit=50):
         usdt_pairs.sort(key=lambda x: x[1], reverse=True)
         return [item[0] for item in usdt_pairs[:limit]]
     except Exception as e:
-        print(f"Error fetching tickers (API IP Limit): {e}")
+        print(f"Error fetching tickers: {e}")
         return []
 
-def calculate_score(vol_spike):
-    if vol_spike >= 150:
-        return 10, 10, "Super Strong"
-    elif vol_spike >= 80:
-        return 9, 9, "Very Strong"
-    elif vol_spike >= 40:
-        return 8, 8, "Strong"
-    elif vol_spike >= 20:
-        return 7, 7, "Moderate"
-    else:
-        return 6, 6, "Normal"
+def calculate_score_and_stars(vol_spike):
+    """Calculates Score & Stars based on Video Analysis Criteria"""
+    if vol_spike >= 100.0:
+        return 10, 10, "SUPER PUMP DETECTED 🚀"
+    elif vol_spike >= 50.0:
+        return 9, 9, "HIGH PUMP CHANCE 🔥"
+    elif vol_spike >= 15.0:
+        return 7, 7, "RAPID SPIKE ⚡"
+    elif vol_spike >= 8.0:
+        return 6, 6, "VOLUME BUILDING 📈"
+    else:  # 5x to 8x
+        return 5, 5, "EARLY SPIKE DETECTED 👀"
 
 def scan_binance_market():
     coins = get_binance_top_coins(TOP_N_COINS)
     if not coins:
-        print("Skipping iteration due to empty market fetch (IP restricted). Retrying soon...")
+        print("Skipping iteration due to empty market fetch. Retrying...")
         return
 
     for symbol in coins:
         try:
-            # Added a slight sleep per coin request to respect Binance IP Limits on Render
-            time.sleep(0.1)
+            time.sleep(0.1)  # IP Protection Delay
             
             ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=MA_PERIOD + 1)
             if len(ohlcv) < MA_PERIOD + 1:
@@ -92,16 +92,16 @@ def scan_binance_market():
             current_price = current_candle[4]
             price_change = ((current_price - open_price) / open_price) * 100
 
-            if vol_spike >= MIN_SPIKE_MULTIPLIER and price_change > 0.3:
-                score, stars, label = calculate_score(vol_spike)
+            # Video Strategy Trigger: Volume >= 5x & Positive Price Candle (>0.2%)
+            if vol_spike >= MIN_SPIKE_MULTIPLIER and price_change > 0.2:
+                score, stars, status_label = calculate_score_and_stars(vol_spike)
                 star_str = "⭐" * stars
                 clean_symbol = symbol.split('/')[0] + "USDT"
 
                 telegram_msg = (
-                    f"🚨 *CONFIRMED PUMP • {clean_symbol}* `[{TIMEFRAME}]`\n"
-                    f"💥 *High Chance of Pump — Rapid Spike Detected!*\n\n"
+                    f"🚨 *PRE-PUMP ALERT • {clean_symbol}* `[{TIMEFRAME}]`\n"
+                    f"💥 *{status_label}*\n\n"
                     f"Stars: {star_str}\n"
-                    f"Status: *({label})*\n"
                     f"Entry: `${current_price:.6f}`\n"
                     f"Volume Spike: *{vol_spike:.1f}x avg*\n"
                     f"Avg Vol (20x1m): `${avg_vol_usdt/1000:.1f}k` | Current: `${current_vol_usdt/1000000:.2f}m`\n"
@@ -114,18 +114,16 @@ def scan_binance_market():
                 send_telegram_alert(telegram_msg)
 
         except Exception as e:
-            # Catch DDoS or RateLimit errors without crashing the script
-            print(f"Skipping {symbol} due to API rate limits.")
-            time.sleep(2)
+            time.sleep(1)
             continue
 
 if __name__ == "__main__":
     startup_msg = (
-        "🚀 *Binance Pre-Pump Scanner Started! (IP-Safe Active)*\n\n"
+        "🚀 *Binance Pre-Pump Scanner Started! (Video Strategy Adjusted)*\n\n"
         f"• *Timeframe:* `{TIMEFRAME}`\n"
-        f"• *Scan Scope:* Top `{TOP_N_COINS}` Binance Coins\n"
-        f"• *Min Spike Trigger:* `{MIN_SPIKE_MULTIPLIER}x`\n\n"
-        "🟢 Bot is now actively scanning the market..."
+        f"• *Scan Scope:* Top `{TOP_N_COINS}` Binance Pairs\n"
+        f"• *Min Spike Trigger:* `{MIN_SPIKE_MULTIPLIER}x` (Capturing Early Movements)\n\n"
+        "🟢 Scanner is active and monitoring market spikes..."
     )
     print("Sending startup alert to Telegram...")
     send_telegram_alert(startup_msg)
@@ -133,4 +131,4 @@ if __name__ == "__main__":
     print("🚀 Binance Pre-Pump Bot Started Scanning...")
     while True:
         scan_binance_market()
-        time.sleep(60)  # 1-minute interval loop
+        time.sleep(60)
