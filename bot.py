@@ -1,6 +1,23 @@
 import time
 import requests
 import ccxt
+import threading
+from flask import Flask
+
+# Flask app to satisfy Render Web Service port check
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Pre-Pump Bot is Running Active!"
+
+def run_flask():
+    import os
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+# Start Flask in a background thread
+threading.Thread(target=run_flask, daemon=True).start()
 
 # ==================== CONFIGURATION ====================
 TELEGRAM_BOT_TOKEN = "8868734831:AAG5dN3JDANsRjQbcLsPdUqZX5_7yjSPXvM"
@@ -9,10 +26,9 @@ TELEGRAM_CHAT_ID = "8825999665"
 # Scan Parameters
 TIMEFRAME = '1m'
 MA_PERIOD = 20
-TOP_N_COINS = 50            # Binance Top 50 pairs to respect Render IP limits
-MIN_SPIKE_MULTIPLIER = 5.0  # Video Strategy: Catching early spikes starting from 5x
+TOP_N_COINS = 50
+MIN_SPIKE_MULTIPLIER = 5.0
 
-# Binance Futures Setup
 exchange = ccxt.binance({
     'enableRateLimit': True,
     'rateLimit': 1500,
@@ -23,7 +39,6 @@ exchange = ccxt.binance({
 })
 
 def send_telegram_alert(message):
-    """Send Notification to Telegram"""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -36,7 +51,6 @@ def send_telegram_alert(message):
         print(f"Telegram Connection Error: {e}")
 
 def get_binance_top_coins(limit=50):
-    """Fetch Top N Binance USDT Futures pairs safely"""
     try:
         tickers = exchange.fetch_tickers()
         usdt_pairs = []
@@ -52,7 +66,6 @@ def get_binance_top_coins(limit=50):
         return []
 
 def calculate_score_and_stars(vol_spike):
-    """Calculates Score & Stars based on Video Analysis Criteria"""
     if vol_spike >= 100.0:
         return 10, 10, "SUPER PUMP DETECTED 🚀"
     elif vol_spike >= 50.0:
@@ -61,19 +74,17 @@ def calculate_score_and_stars(vol_spike):
         return 7, 7, "RAPID SPIKE ⚡"
     elif vol_spike >= 8.0:
         return 6, 6, "VOLUME BUILDING 📈"
-    else:  # 5x to 8x
+    else:
         return 5, 5, "EARLY SPIKE DETECTED 👀"
 
 def scan_binance_market():
     coins = get_binance_top_coins(TOP_N_COINS)
     if not coins:
-        print("Skipping iteration due to empty market fetch. Retrying...")
         return
 
     for symbol in coins:
         try:
-            time.sleep(0.1)  # IP Protection Delay
-            
+            time.sleep(0.1)
             ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=MA_PERIOD + 1)
             if len(ohlcv) < MA_PERIOD + 1:
                 continue
@@ -92,7 +103,6 @@ def scan_binance_market():
             current_price = current_candle[4]
             price_change = ((current_price - open_price) / open_price) * 100
 
-            # Video Strategy Trigger: Volume >= 5x & Positive Price Candle (>0.2%)
             if vol_spike >= MIN_SPIKE_MULTIPLIER and price_change > 0.2:
                 score, stars, status_label = calculate_score_and_stars(vol_spike)
                 star_str = "⭐" * stars
@@ -113,22 +123,20 @@ def scan_binance_market():
                 print(f"[SPIKE FOUND] {clean_symbol} - Volume Spike: {vol_spike:.1f}x")
                 send_telegram_alert(telegram_msg)
 
-        except Exception as e:
+        except Exception:
             time.sleep(1)
             continue
 
 if __name__ == "__main__":
     startup_msg = (
-        "🚀 *Binance Pre-Pump Scanner Started! (Video Strategy Adjusted)*\n\n"
+        "🚀 *Binance Pre-Pump Scanner Started!*\n\n"
         f"• *Timeframe:* `{TIMEFRAME}`\n"
         f"• *Scan Scope:* Top `{TOP_N_COINS}` Binance Pairs\n"
-        f"• *Min Spike Trigger:* `{MIN_SPIKE_MULTIPLIER}x` (Capturing Early Movements)\n\n"
+        f"• *Min Spike Trigger:* `{MIN_SPIKE_MULTIPLIER}x`\n\n"
         "🟢 Scanner is active and monitoring market spikes..."
     )
-    print("Sending startup alert to Telegram...")
     send_telegram_alert(startup_msg)
     
-    print("🚀 Binance Pre-Pump Bot Started Scanning...")
     while True:
         scan_binance_market()
         time.sleep(60)
