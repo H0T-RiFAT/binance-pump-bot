@@ -147,70 +147,91 @@ def monitor_open_trades():
         tp_price = trade['tp_price']
         sl_price = trade['sl_price']
         hold_mins = trade['hold_time_mins']
-        max_price_so_far = trade['max_price_reached'] or entry_price
-        min_price_so_far = trade['min_price_reached'] or entry_price
 
         try:
-            ticker = exchange.fetch_ticker(symbol)
-            curr_price = ticker.get('last')
-            high_price = ticker.get('high', curr_price)
-            low_price = ticker.get('low', curr_price)
+            # Parse entry time to calculate candle timestamp since entry
+            entry_dt = datetime.strptime(trade['entry_time'], '%Y-%m-%d %H:%M:%S')
+            entry_ms = int(entry_dt.timestamp() * 1000)
 
-            if not curr_price:
+            # Fetch 1m candles since trade entry to evaluate true price movement
+            ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1m', since=entry_ms)
+            if not ohlcv:
                 continue
 
-            max_price_so_far = max(max_price_so_far, high_price or curr_price)
-            min_price_so_far = min(min_price_so_far, low_price or curr_price)
+            max_price_so_far = trade['max_price_reached'] or entry_price
+            min_price_so_far = trade['min_price_reached'] or entry_price
+
+            hit_tp = False
+            hit_sl = False
+            exit_price = None
+
+            for candle in ohlcv:
+                c_high = candle[2]
+                c_low = candle[3]
+
+                max_price_so_far = max(max_price_so_far, c_high)
+                min_price_so_far = min(min_price_so_far, c_low)
+
+                # Check if this candle hit TP or SL
+                if c_high >= tp_price:
+                    hit_tp = True
+                    exit_price = tp_price
+                    break
+                elif c_low <= sl_price:
+                    hit_sl = True
+                    exit_price = sl_price
+                    break
+
+            latest_close = ohlcv[-1][4]
             max_pump_pct = ((max_price_so_far - entry_price) / entry_price) * 100.0
 
+            # Update max/min extremes in DB
             database.update_open_trade_extremes(trade_id, max_price_so_far, min_price_so_far, max_pump_pct)
 
             # 1. Check Take Profit Hit
-            if high_price and high_price >= tp_price:
-                pnl_pct = float(database.get_setting('tp_pct', '2.0'))
-                database.close_trade(trade_id, 'WON', tp_price, pnl_pct, max_price_so_far, max_pump_pct)
-                print(f"[TRADE WON] {symbol} hit TP target at ${tp_price:.6f} (+{pnl_pct}%)")
+            if hit_tp:
+                tp_pct_val = float(database.get_setting('tp_pct', '2.0'))
+                database.close_trade(trade_id, 'WON', exit_price, tp_pct_val, max_price_so_far, max_pump_pct)
+                print(f"[TRADE WON] {symbol} hit TP target at ${exit_price:.6f} (+{tp_pct_val}%)")
                 if send_close_alert:
                     clean_sym = symbol.split('/')[0] + "USDT"
                     send_telegram_alert(
                         f"🎯 *TRADE CLOSED [WIN] • {clean_sym}*\n\n"
                         f"Status: *TAKE PROFIT HIT* 🚀\n"
-                        f"Entry: `${entry_price:.6f}` | Exit: `${tp_price:.6f}`\n"
-                        f"PnL: `+{pnl_pct:.2f}%` | Max Pump: `+{max_pump_pct:.2f}%`"
+                        f"Entry: `${entry_price:.6f}` | Exit: `${exit_price:.6f}`\n"
+                        f"PnL: `+{tp_pct_val:.2f}%` | Max Pump: `+{max_pump_pct:.2f}%`"
                     )
                 continue
 
             # 2. Check Stop Loss Hit
-            if low_price and low_price <= sl_price:
+            if hit_sl:
                 sl_pct_val = float(database.get_setting('sl_pct', '1.0'))
                 pnl_pct = -abs(sl_pct_val)
-                database.close_trade(trade_id, 'LOST', sl_price, pnl_pct, max_price_so_far, max_pump_pct)
-                print(f"[TRADE LOST] {symbol} hit SL at ${sl_price:.6f} ({pnl_pct}%)")
+                database.close_trade(trade_id, 'LOST', exit_price, pnl_pct, max_price_so_far, max_pump_pct)
+                print(f"[TRADE LOST] {symbol} hit SL target at ${exit_price:.6f} ({pnl_pct}%)")
                 if send_close_alert:
                     clean_sym = symbol.split('/')[0] + "USDT"
                     send_telegram_alert(
                         f"🔻 *TRADE CLOSED [LOSS] • {clean_sym}*\n\n"
                         f"Status: *STOP LOSS HIT* 🛑\n"
-                        f"Entry: `${entry_price:.6f}` | Exit: `${sl_price:.6f}`\n"
+                        f"Entry: `${entry_price:.6f}` | Exit: `${exit_price:.6f}`\n"
                         f"PnL: `{pnl_pct:.2f}%` | Max Pump: `+{max_pump_pct:.2f}%`"
                     )
                 continue
 
             # 3. Check Expiry
-            entry_time_dt = datetime.strptime(trade['entry_time'], '%Y-%m-%d %H:%M:%S')
-            elapsed_mins = (datetime.utcnow() - entry_time_dt).total_seconds() / 60.0
-
+            elapsed_mins = (datetime.utcnow() - entry_dt).total_seconds() / 60.0
             if elapsed_mins >= hold_mins:
-                pnl_pct = ((curr_price - entry_price) / entry_price) * 100.0
+                pnl_pct = ((latest_close - entry_price) / entry_price) * 100.0
                 status = 'WON' if pnl_pct > 0 else ('LOST' if pnl_pct < 0 else 'EXPIRED')
-                database.close_trade(trade_id, status, curr_price, round(pnl_pct, 2), max_price_so_far, max_pump_pct)
+                database.close_trade(trade_id, status, latest_close, round(pnl_pct, 2), max_price_so_far, max_pump_pct)
                 print(f"[TRADE EXPIRED] {symbol} closed at hold limit ({hold_mins}m): PnL {pnl_pct:.2f}%")
                 if send_close_alert:
                     clean_sym = symbol.split('/')[0] + "USDT"
                     send_telegram_alert(
-                        f"⏱️ *TRADE CLOSED [EXPIRED] • {clean_sym}*\n\n"
+                        f"⏱️ *TRADE CLOSED [{status}] • {clean_sym}*\n\n"
                         f"Status: *{status} (TIME LIMIT)*\n"
-                        f"Entry: `${entry_price:.6f}` | Exit: `${curr_price:.6f}`\n"
+                        f"Entry: `${entry_price:.6f}` | Exit: `${latest_close:.6f}`\n"
                         f"PnL: `{pnl_pct:+.2f}%` | Max Pump: `+{max_pump_pct:.2f}%`"
                     )
 
