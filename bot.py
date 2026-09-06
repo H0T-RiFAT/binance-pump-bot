@@ -3,7 +3,7 @@ import os
 import requests
 import ccxt
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Flask, render_template, jsonify, request
 import database
 
@@ -55,7 +55,7 @@ def ping():
     return jsonify({
         'status': 'ok',
         'message': 'Binance Pre-Pump Bot & Overview Server Active',
-        'timestamp': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        'timestamp': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
     })
 
 @app.route('/api/stats')
@@ -149,13 +149,19 @@ def monitor_open_trades():
         hold_mins = trade['hold_time_mins']
 
         try:
-            # Parse entry time to calculate candle timestamp since entry
-            entry_dt = datetime.strptime(trade['entry_time'], '%Y-%m-%d %H:%M:%S')
-            entry_ms = int(entry_dt.timestamp() * 1000)
+            entry_ms = trade.get('entry_timestamp_ms')
+            if not entry_ms:
+                dt = datetime.strptime(trade['entry_time'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+                entry_ms = int(dt.timestamp() * 1000)
 
-            # Fetch 1m candles since trade entry to evaluate true price movement
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1m', since=entry_ms)
+            # Fetch 1m candles starting slightly before entry_ms
+            ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1m', since=entry_ms - 60000)
             if not ohlcv:
+                continue
+
+            # Strict filter: ONLY evaluate candles from the trade entry minute onward
+            valid_candles = [c for c in ohlcv if c[0] >= (entry_ms - 30000)]
+            if not valid_candles:
                 continue
 
             max_price_so_far = trade['max_price_reached'] or entry_price
@@ -165,7 +171,7 @@ def monitor_open_trades():
             hit_sl = False
             exit_price = None
 
-            for candle in ohlcv:
+            for candle in valid_candles:
                 c_high = candle[2]
                 c_low = candle[3]
 
@@ -182,7 +188,7 @@ def monitor_open_trades():
                     exit_price = sl_price
                     break
 
-            latest_close = ohlcv[-1][4]
+            latest_close = valid_candles[-1][4]
             max_pump_pct = ((max_price_so_far - entry_price) / entry_price) * 100.0
 
             # Update max/min extremes in DB
@@ -220,7 +226,8 @@ def monitor_open_trades():
                 continue
 
             # 3. Check Expiry
-            elapsed_mins = (datetime.utcnow() - entry_dt).total_seconds() / 60.0
+            now_ms = int(time.time() * 1000)
+            elapsed_mins = (now_ms - entry_ms) / 60000.0
             if elapsed_mins >= hold_mins:
                 pnl_pct = ((latest_close - entry_price) / entry_price) * 100.0
                 status = 'WON' if pnl_pct > 0 else ('LOST' if pnl_pct < 0 else 'EXPIRED')
@@ -328,10 +335,8 @@ def keep_alive_worker():
     while True:
         time.sleep(600)  # Every 10 minutes
         try:
-            # Ping external Render URL
             if RENDER_EXTERNAL_URL:
                 requests.get(f"{RENDER_EXTERNAL_URL.rstrip('/')}/ping", timeout=10)
-            # Also ping local server
             requests.get(local_url, timeout=10)
             print("[KEEP-ALIVE] Render server ping successful.")
         except Exception as e:

@@ -328,6 +328,19 @@
         let outcomesChartInstance = null;
         let tradeHistoryData = [];
 
+        function formatDate(timeStr, ms) {
+            if (ms) {
+                return new Date(ms).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+            }
+            if (!timeStr) return '-';
+            let iso = timeStr.includes('Z') ? timeStr : timeStr.replace(' ', 'T') + 'Z';
+            try {
+                return new Date(iso).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+            } catch (e) {
+                return timeStr;
+            }
+        }
+
         async function fetchDashboardStats() {
             try {
                 const res = await fetch('/api/stats?days=30');
@@ -404,7 +417,7 @@
                         </td>
                         <td class="py-3 px-4 font-semibold text-emerald-400">+${Number(t.max_pump_pct || 0).toFixed(2)}%</td>
                         <td class="py-3 px-4 font-mono ${pnlClass}">${(t.live_pnl_pct >= 0 ? '+' : '')}${t.live_pnl_pct.toFixed(2)}%</td>
-                        <td class="py-3 px-4 text-xs text-gray-400 font-mono">${t.entry_time ? t.entry_time.substring(11, 16) : ''}</td>
+                        <td class="py-3 px-4 text-xs text-gray-400 font-mono">${formatDate(t.entry_time, t.entry_timestamp_ms)}</td>
                     </tr>
                 `;
             }).join('');
@@ -436,7 +449,7 @@
 
                 return `
                     <tr class="hover:bg-gray-800/40 transition">
-                        <td class="py-3 px-4 text-xs text-gray-400 font-mono">${t.entry_time ? t.entry_time.substring(0, 16) : '-'}</td>
+                        <td class="py-3 px-4 text-xs text-gray-400 font-mono">${formatDate(t.entry_time, t.entry_timestamp_ms)}</td>
                         <td class="py-3 px-4 font-bold text-white">${cleanSym}</td>
                         <td class="py-3 px-4 font-semibold text-cyan-400">${t.vol_spike ? t.vol_spike.toFixed(1) + 'x' : '-'}</td>
                         <td class="py-3 px-4 font-mono text-gray-300">$${Number(t.entry_price).toFixed(6)}</td>

@@ -1,6 +1,7 @@
 import sqlite3
 import os
-from datetime import datetime, timedelta
+import time
+from datetime import datetime, timedelta, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'database.db')
 
@@ -26,7 +27,8 @@ def init_db():
             score INTEGER,
             stars INTEGER,
             status_label TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            timestamp_ms INTEGER
         )
     ''')
 
@@ -46,11 +48,26 @@ def init_db():
             min_price_reached REAL,
             max_pump_pct REAL DEFAULT 0.0,
             entry_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+            entry_timestamp_ms INTEGER,
             exit_time DATETIME DEFAULT NULL,
+            exit_timestamp_ms INTEGER,
             hold_time_mins INTEGER DEFAULT 30,
             FOREIGN KEY(signal_id) REFERENCES signals(id)
         )
     ''')
+
+    # Migration check for timestamp_ms columns if DB already exists
+    cursor.execute("PRAGMA table_info(signals)")
+    cols = [row['name'] for row in cursor.fetchall()]
+    if 'timestamp_ms' not in cols:
+        cursor.execute("ALTER TABLE signals ADD COLUMN timestamp_ms INTEGER")
+
+    cursor.execute("PRAGMA table_info(trades)")
+    t_cols = [row['name'] for row in cursor.fetchall()]
+    if 'entry_timestamp_ms' not in t_cols:
+        cursor.execute("ALTER TABLE trades ADD COLUMN entry_timestamp_ms INTEGER")
+    if 'exit_timestamp_ms' not in t_cols:
+        cursor.execute("ALTER TABLE trades ADD COLUMN exit_timestamp_ms INTEGER")
 
     # Settings table
     cursor.execute('''
@@ -103,10 +120,13 @@ def get_all_settings():
 def add_signal(symbol, entry_price, vol_spike, price_change_pct, score, stars, status_label, avg_vol_usdt=0, current_vol_usdt=0):
     conn = get_connection()
     cursor = conn.cursor()
+    now_ms = int(time.time() * 1000)
+    now_utc_str = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
     cursor.execute('''
-        INSERT INTO signals (symbol, entry_price, vol_spike, price_change_pct, score, stars, status_label, avg_vol_usdt, current_vol_usdt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (symbol, entry_price, vol_spike, price_change_pct, score, stars, status_label, avg_vol_usdt, current_vol_usdt))
+        INSERT INTO signals (symbol, entry_price, vol_spike, price_change_pct, score, stars, status_label, avg_vol_usdt, current_vol_usdt, timestamp, timestamp_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (symbol, entry_price, vol_spike, price_change_pct, score, stars, status_label, avg_vol_usdt, current_vol_usdt, now_utc_str, now_ms))
     signal_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -115,13 +135,15 @@ def add_signal(symbol, entry_price, vol_spike, price_change_pct, score, stars, s
 def create_trade(signal_id, symbol, entry_price, tp_pct=2.0, sl_pct=1.0, hold_time_mins=30):
     tp_price = entry_price * (1 + tp_pct / 100.0)
     sl_price = entry_price * (1 - sl_pct / 100.0)
-    
+    now_ms = int(time.time() * 1000)
+    now_utc_str = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO trades (signal_id, symbol, entry_price, tp_price, sl_price, status, max_price_reached, min_price_reached, hold_time_mins)
-        VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
-    ''', (signal_id, symbol, entry_price, tp_price, sl_price, entry_price, entry_price, hold_time_mins))
+        INSERT INTO trades (signal_id, symbol, entry_price, tp_price, sl_price, status, max_price_reached, min_price_reached, hold_time_mins, entry_time, entry_timestamp_ms)
+        VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?)
+    ''', (signal_id, symbol, entry_price, tp_price, sl_price, entry_price, entry_price, hold_time_mins, now_utc_str, now_ms))
     trade_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -138,12 +160,14 @@ def get_open_trades():
 def close_trade(trade_id, status, exit_price, pnl_pct, max_price_reached, max_pump_pct):
     conn = get_connection()
     cursor = conn.cursor()
-    now_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    now_ms = int(time.time() * 1000)
+    now_utc_str = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
     cursor.execute('''
         UPDATE trades 
-        SET status = ?, exit_price = ?, pnl_pct = ?, exit_time = ?, max_price_reached = ?, max_pump_pct = ?
+        SET status = ?, exit_price = ?, pnl_pct = ?, exit_time = ?, exit_timestamp_ms = ?, max_price_reached = ?, max_pump_pct = ?
         WHERE id = ?
-    ''', (status, exit_price, pnl_pct, now_str, max_price_reached, max_pump_pct, trade_id))
+    ''', (status, exit_price, pnl_pct, now_utc_str, now_ms, max_price_reached, max_pump_pct, trade_id))
     conn.commit()
     conn.close()
 
@@ -161,7 +185,7 @@ def update_open_trade_extremes(trade_id, max_price_reached, min_price_reached, m
 def get_recent_signals(limit=50):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM signals ORDER BY timestamp DESC LIMIT ?', (limit,))
+    cursor.execute('SELECT * FROM signals ORDER BY id DESC LIMIT ?', (limit,))
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
@@ -173,7 +197,7 @@ def get_trade_history(limit=100):
         SELECT t.*, s.vol_spike, s.score, s.stars, s.status_label 
         FROM trades t
         LEFT JOIN signals s ON t.signal_id = s.id
-        ORDER BY t.entry_time DESC LIMIT ?
+        ORDER BY t.id DESC LIMIT ?
     ''', (limit,))
     rows = cursor.fetchall()
     conn.close()
@@ -183,14 +207,16 @@ def get_dashboard_stats(days=30):
     conn = get_connection()
     cursor = conn.cursor()
 
-    cutoff_date = (datetime.utcnow() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff_str = cutoff_dt.strftime('%Y-%m-%d %H:%M:%S')
+    cutoff_ms = int(cutoff_dt.timestamp() * 1000)
 
     # Total Signals
-    cursor.execute('SELECT COUNT(*) as count FROM signals WHERE timestamp >= ?', (cutoff_date,))
+    cursor.execute('SELECT COUNT(*) as count FROM signals WHERE timestamp_ms >= ? OR timestamp >= ?', (cutoff_ms, cutoff_str))
     total_signals = cursor.fetchone()['count']
 
     # Trades stats
-    cursor.execute('SELECT * FROM trades WHERE entry_time >= ?', (cutoff_date,))
+    cursor.execute('SELECT * FROM trades WHERE entry_timestamp_ms >= ? OR entry_time >= ?', (cutoff_ms, cutoff_str))
     trades = [dict(row) for row in cursor.fetchall()]
 
     total_trades = len(trades)
@@ -221,7 +247,7 @@ def get_dashboard_stats(days=30):
     losses_by_date = {}
 
     for d in range(days, -1, -1):
-        dt_str = (datetime.utcnow() - timedelta(days=d)).strftime('%Y-%m-%d')
+        dt_str = (datetime.now(timezone.utc) - timedelta(days=d)).strftime('%Y-%m-%d')
         pnl_by_date[dt_str] = 0.0
         signals_by_date[dt_str] = 0
         wins_by_date[dt_str] = 0
@@ -230,11 +256,11 @@ def get_dashboard_stats(days=30):
     cursor.execute('''
         SELECT DATE(timestamp) as date_str, COUNT(*) as cnt 
         FROM signals 
-        WHERE timestamp >= ? 
+        WHERE timestamp >= ? OR timestamp_ms >= ?
         GROUP BY DATE(timestamp)
-    ''', (cutoff_date,))
+    ''', (cutoff_str, cutoff_ms))
     for row in cursor.fetchall():
-        if row['date_str'] in signals_by_date:
+        if row['date_str'] and row['date_str'] in signals_by_date:
             signals_by_date[row['date_str']] = row['cnt']
 
     for t in closed_trades:
@@ -247,7 +273,6 @@ def get_dashboard_stats(days=30):
                 elif t['status'] in ('LOST', 'EXPIRED'):
                     losses_by_date[date_str] += 1
 
-    # Calculate Cumulative PnL
     chart_dates = sorted(pnl_by_date.keys())
     chart_pnl_daily = [round(pnl_by_date[d], 2) for d in chart_dates]
     
@@ -287,4 +312,4 @@ def get_dashboard_stats(days=30):
 
 if __name__ == '__main__':
     init_db()
-    print("Database initialized successfully!")
+    print("Database initialized & migrated successfully!")
