@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Binance Pre-Pump Bot | Overview Dashboard</title>
+    <title>Binance Pre-Pump Bot | Overview Dashboard & Portfolio Tracker</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome CDN -->
@@ -22,7 +22,8 @@
                         accentgreen: '#10B981',
                         accentred: '#EF4444',
                         accentblue: '#3B82F6',
-                        accentpurple: '#8B5CF6'
+                        accentpurple: '#8B5CF6',
+                        accentamber: '#F59E0B'
                     }
                 }
             }
@@ -42,14 +43,23 @@
         .glass-card:hover {
             border-color: #374151;
         }
-        .pulse-dot {
+        .pulse-dot-green {
             box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
-            animation: pulse 2s infinite;
+            animation: pulse-g 2s infinite;
         }
-        @keyframes pulse {
+        @keyframes pulse-g {
             0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
             70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
             100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+        .pulse-dot-amber {
+            box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7);
+            animation: pulse-a 2s infinite;
+        }
+        @keyframes pulse-a {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
         }
     </style>
 </head>
@@ -66,19 +76,20 @@
                     <h1 class="text-lg font-bold bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-transparent">
                         Binance Pre-Pump Bot
                     </h1>
-                    <p class="text-xs text-gray-400">Execution Overview & 30-Day PnL Tracker</p>
+                    <p class="text-xs text-gray-400">Execution Overview & Portfolio Analytics</p>
                 </div>
             </div>
 
-            <div class="flex items-center space-x-4">
-                <div class="flex items-center px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold">
-                    <span class="w-2 h-2 rounded-full bg-emerald-500 mr-2 pulse-dot"></span>
-                    SYSTEM ONLINE 24/7
+            <!-- Execution Mode Indicator & Controls -->
+            <div class="flex items-center space-x-3">
+                <div id="mode-badge-container" class="flex items-center px-3.5 py-1.5 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-semibold cursor-pointer" onclick="toggleMode()">
+                    <span id="mode-dot" class="w-2.5 h-2.5 rounded-full bg-cyan-400 mr-2 pulse-dot-green"></span>
+                    <span id="mode-label">PAPER DEMO TRADING</span>
                 </div>
 
                 <button onclick="openSettingsModal()" class="px-3.5 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 text-sm font-medium transition flex items-center space-x-2">
                     <i class="fa-solid fa-sliders text-emerald-400"></i>
-                    <span class="hidden sm:inline">Settings</span>
+                    <span class="hidden sm:inline">Settings & API</span>
                 </button>
             </div>
         </div>
@@ -87,27 +98,49 @@
     <!-- Main Container -->
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 space-y-6">
 
-        <!-- Metrics Overview Grid -->
+        <!-- Binance Futures Portfolio Overview Grid -->
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             
-            <!-- 30-Day PnL Card -->
-            <div class="glass-card rounded-2xl p-5 shadow-xl">
-                <div class="flex items-center justify-between text-gray-400 text-sm mb-2">
-                    <span>30-Day Cumulative PnL</span>
-                    <i class="fa-solid fa-chart-line text-emerald-400"></i>
+            <!-- Account Balance & Total Return Card -->
+            <div class="glass-card rounded-2xl p-5 shadow-xl border-l-4 border-l-emerald-500">
+                <div class="flex items-center justify-between text-gray-400 text-sm mb-1">
+                    <span>Account Balance (USDT)</span>
+                    <i class="fa-solid fa-wallet text-emerald-400"></i>
                 </div>
                 <div class="flex items-baseline space-x-2">
-                    <span id="stat-total-pnl" class="text-3xl font-extrabold text-emerald-400">+0.00%</span>
+                    <span id="stat-paper-balance" class="text-3xl font-extrabold text-white">$1,000.00</span>
                 </div>
-                <div class="mt-3 text-xs text-gray-400 flex justify-between border-t border-gray-800 pt-2">
+                <div class="mt-3 text-xs flex justify-between border-t border-gray-800 pt-2 text-gray-400">
+                    <span>Total PnL: <strong id="stat-total-pnl-usdt" class="text-emerald-400">+$0.00</strong></span>
+                    <span>Return: <strong id="stat-total-pnl-pct" class="text-emerald-400">+0.00%</strong></span>
+                </div>
+            </div>
+
+            <!-- Risk Metrics & Profit Factor Card -->
+            <div class="glass-card rounded-2xl p-5 shadow-xl border-l-4 border-l-cyan-500">
+                <div class="flex items-center justify-between text-gray-400 text-sm mb-1">
+                    <span>Profit Factor & Drawdown</span>
+                    <i class="fa-solid fa-shield-halved text-cyan-400"></i>
+                </div>
+                <div class="flex items-baseline justify-between mt-1">
+                    <div>
+                        <span id="stat-profit-factor" class="text-3xl font-extrabold text-cyan-400">1.00</span>
+                        <span class="text-xs text-gray-400 block">Profit Factor</span>
+                    </div>
+                    <div class="text-right">
+                        <span id="stat-max-dd" class="text-xl font-bold text-rose-400">0.00%</span>
+                        <span class="text-xs text-gray-400 block">Max Drawdown</span>
+                    </div>
+                </div>
+                <div class="mt-3 text-xs text-gray-400 border-t border-gray-800 pt-2 flex justify-between">
                     <span>Best Trade: <strong id="stat-best-trade" class="text-emerald-400">+0.0%</strong></span>
                     <span>Worst: <strong id="stat-worst-trade" class="text-rose-400">0.0%</strong></span>
                 </div>
             </div>
 
-            <!-- Win Rate Card -->
-            <div class="glass-card rounded-2xl p-5 shadow-xl">
-                <div class="flex items-center justify-between text-gray-400 text-sm mb-2">
+            <!-- Win Rate & Win/Loss Count Card -->
+            <div class="glass-card rounded-2xl p-5 shadow-xl border-l-4 border-l-yellow-500">
+                <div class="flex items-center justify-between text-gray-400 text-sm mb-1">
                     <span>Win Rate (30 Days)</span>
                     <i class="fa-solid fa-trophy text-yellow-400"></i>
                 </div>
@@ -120,42 +153,20 @@
                 </div>
             </div>
 
-            <!-- Total Signals Card -->
-            <div class="glass-card rounded-2xl p-5 shadow-xl">
-                <div class="flex items-center justify-between text-gray-400 text-sm mb-2">
-                    <span>Total Signals & Trades</span>
-                    <i class="fa-solid fa-bullhorn text-cyan-400"></i>
-                </div>
-                <div class="flex items-baseline justify-between">
-                    <div>
-                        <span id="stat-total-signals" class="text-3xl font-extrabold text-cyan-400">0</span>
-                        <span class="text-xs text-gray-400 block">Signals Detected</span>
-                    </div>
-                    <div class="text-right">
-                        <span id="stat-executed-trades" class="text-xl font-bold text-gray-200">0</span>
-                        <span class="text-xs text-gray-400 block">Executed Trades</span>
-                    </div>
-                </div>
-                <div class="mt-3 text-xs text-gray-400 border-t border-gray-800 pt-2 flex justify-between">
-                    <span>Open Active: <strong id="stat-open-count" class="text-cyan-400">0</strong></span>
-                    <span>Expired: <strong id="stat-expired-count" class="text-gray-400">0</strong></span>
-                </div>
-            </div>
-
-            <!-- Trade Performance Card -->
-            <div class="glass-card rounded-2xl p-5 shadow-xl">
-                <div class="flex items-center justify-between text-gray-400 text-sm mb-2">
-                    <span>Avg Profit vs Loss</span>
-                    <i class="fa-solid fa-scale-balanced text-purple-400"></i>
+            <!-- Margin & Leverage Config Card -->
+            <div class="glass-card rounded-2xl p-5 shadow-xl border-l-4 border-l-purple-500">
+                <div class="flex items-center justify-between text-gray-400 text-sm mb-1">
+                    <span>Trade Margin & Leverage</span>
+                    <i class="fa-solid fa-layer-group text-purple-400"></i>
                 </div>
                 <div class="grid grid-cols-2 gap-2 mt-1">
-                    <div class="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-2.5 text-center">
-                        <span class="text-xs text-gray-400 block">Avg Win</span>
-                        <span id="stat-avg-win" class="text-lg font-bold text-emerald-400">+0.00%</span>
+                    <div class="bg-purple-500/10 border border-purple-500/20 rounded-xl p-2 text-center">
+                        <span class="text-xs text-gray-400 block">Margin / Trade</span>
+                        <span id="cfg-disp-margin" class="text-base font-bold text-purple-400">$20 USDT</span>
                     </div>
-                    <div class="bg-rose-500/10 border border-rose-500/20 rounded-xl p-2.5 text-center">
-                        <span class="text-xs text-gray-400 block">Avg Loss</span>
-                        <span id="stat-avg-loss" class="text-lg font-bold text-rose-400">-0.00%</span>
+                    <div class="bg-purple-500/10 border border-purple-500/20 rounded-xl p-2 text-center">
+                        <span class="text-xs text-gray-400 block">Leverage</span>
+                        <span id="cfg-disp-leverage" class="text-base font-bold text-purple-400">5x</span>
                     </div>
                 </div>
             </div>
@@ -165,12 +176,12 @@
         <!-- Analytics Charts Grid -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
             
-            <!-- 30-Day PnL Line Chart (2 Cols) -->
+            <!-- Account Balance Growth Chart (2 Cols) -->
             <div class="glass-card rounded-2xl p-6 lg:col-span-2 shadow-xl">
                 <div class="flex items-center justify-between mb-4">
                     <div>
-                        <h2 class="text-base font-bold text-gray-100">30-Day Cumulative PnL Performance</h2>
-                        <p class="text-xs text-gray-400">Simulated signal execution return curve over time</p>
+                        <h2 class="text-base font-bold text-gray-100">Account Portfolio Growth Curve ($ USDT)</h2>
+                        <p class="text-xs text-gray-400">Simulated / Live balance trajectory over time</p>
                     </div>
                     <span class="text-xs text-gray-400 bg-gray-800 px-3 py-1 rounded-full border border-gray-700">30 Days</span>
                 </div>
@@ -194,11 +205,11 @@
 
         </div>
 
-        <!-- Live Active Open Trades Section -->
+        <!-- Live Active Open Trades Section (Binance Futures Style) -->
         <div class="glass-card rounded-2xl p-6 shadow-xl">
             <div class="flex items-center justify-between mb-4">
                 <div class="flex items-center space-x-3">
-                    <div class="w-3 h-3 rounded-full bg-cyan-400 pulse-dot"></div>
+                    <div class="w-3 h-3 rounded-full bg-cyan-400 pulse-dot-green"></div>
                     <h2 class="text-lg font-bold text-gray-100">Live Active Executed Trades</h2>
                 </div>
                 <span id="live-open-badge" class="px-2.5 py-1 rounded-md bg-cyan-500/10 text-cyan-400 text-xs font-semibold border border-cyan-500/20">
@@ -210,13 +221,13 @@
                 <table class="w-full text-left text-sm text-gray-300">
                     <thead class="text-xs uppercase bg-gray-800/60 text-gray-400 border-b border-gray-800">
                         <tr>
-                            <th class="py-3 px-4">Symbol</th>
+                            <th class="py-3 px-4">Symbol & Mode</th>
+                            <th class="py-3 px-4">Margin & Leverage</th>
                             <th class="py-3 px-4">Entry Price</th>
                             <th class="py-3 px-4">Live Price</th>
                             <th class="py-3 px-4">Target TP / SL</th>
                             <th class="py-3 px-4">Max Pump %</th>
-                            <th class="py-3 px-4">Live PnL</th>
-                            <th class="py-3 px-4">Hold Time</th>
+                            <th class="py-3 px-4">Live PnL (USDT / %)</th>
                         </tr>
                     </thead>
                     <tbody id="open-trades-tbody" class="divide-y divide-gray-800/50">
@@ -232,8 +243,8 @@
         <div class="glass-card rounded-2xl p-6 shadow-xl">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-gray-800 gap-4">
                 <div>
-                    <h2 class="text-lg font-bold text-gray-100">30-Day Trade History & Signal Logs</h2>
-                    <p class="text-xs text-gray-400">Complete execution record of all detected pre-pump alerts</p>
+                    <h2 class="text-lg font-bold text-gray-100">30-Day Trade History & Position Log</h2>
+                    <p class="text-xs text-gray-400">Binance Futures execution records with exact USDT & % return</p>
                 </div>
 
                 <div class="flex items-center space-x-3">
@@ -254,17 +265,18 @@
                         <tr>
                             <th class="py-3 px-4">Date & Time</th>
                             <th class="py-3 px-4">Symbol</th>
+                            <th class="py-3 px-4">Mode & Position</th>
                             <th class="py-3 px-4">Spike Vol</th>
                             <th class="py-3 px-4">Entry Price</th>
                             <th class="py-3 px-4">Exit Price</th>
                             <th class="py-3 px-4">Max Pump %</th>
-                            <th class="py-3 px-4">PnL %</th>
+                            <th class="py-3 px-4">PnL (USDT / %)</th>
                             <th class="py-3 px-4">Outcome</th>
                         </tr>
                     </thead>
                     <tbody id="history-trades-tbody" class="divide-y divide-gray-800/50">
                         <tr>
-                            <td colspan="8" class="py-8 text-center text-gray-500">Loading trade history...</td>
+                            <td colspan="9" class="py-8 text-center text-gray-500">Loading trade history...</td>
                         </tr>
                     </tbody>
                 </table>
@@ -273,13 +285,13 @@
 
     </main>
 
-    <!-- Settings Modal -->
+    <!-- Settings & API Modal -->
     <div id="settings-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center hidden">
-        <div class="glass-card bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-5">
+        <div class="glass-card bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
             <div class="flex items-center justify-between border-b border-gray-800 pb-3">
                 <h3 class="text-lg font-bold text-gray-100 flex items-center space-x-2">
                     <i class="fa-solid fa-sliders text-emerald-400"></i>
-                    <span>Bot & Execution Settings</span>
+                    <span>Bot, API & Execution Settings</span>
                 </h3>
                 <button onclick="closeSettingsModal()" class="text-gray-400 hover:text-white">
                     <i class="fa-solid fa-xmark text-lg"></i>
@@ -287,6 +299,32 @@
             </div>
 
             <form id="settings-form" onsubmit="saveSettings(event)" class="space-y-4 text-sm">
+                <!-- Mode Selector -->
+                <div class="bg-gray-800/60 p-3 rounded-xl border border-gray-700">
+                    <label class="block text-xs font-bold text-gray-300 mb-2">Execution Mode</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button type="button" id="btn-mode-paper" onclick="setModeForm('PAPER')" class="py-2 px-3 rounded-lg text-xs font-bold border transition">PAPER DEMO</button>
+                        <button type="button" id="btn-mode-real" onclick="setModeForm('REAL')" class="py-2 px-3 rounded-lg text-xs font-bold border transition">REAL BINANCE LIVE</button>
+                    </div>
+                </div>
+
+                <!-- Margin & Leverage -->
+                <div class="grid grid-cols-3 gap-3">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-400 mb-1">Margin ($ USDT)</label>
+                        <input type="number" step="5" id="cfg-margin" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:border-emerald-500" required>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-400 mb-1">Leverage (x)</label>
+                        <input type="number" min="1" max="50" id="cfg-leverage" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:border-emerald-500" required>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-400 mb-1">Paper Starting ($)</label>
+                        <input type="number" id="cfg-paper-capital" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:border-emerald-500" required>
+                    </div>
+                </div>
+
+                <!-- Strategy Targets -->
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-xs font-medium text-gray-400 mb-1">Take Profit Target (%)</label>
@@ -300,7 +338,7 @@
 
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-xs font-medium text-gray-400 mb-1">Max Hold Time (Minutes)</label>
+                        <label class="block text-xs font-medium text-gray-400 mb-1">Max Hold Time (Mins)</label>
                         <input type="number" id="cfg-hold" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:border-emerald-500" required>
                     </div>
                     <div>
@@ -309,9 +347,25 @@
                     </div>
                 </div>
 
-                <div class="flex items-center space-x-3 pt-2">
+                <!-- Binance API Credentials Section -->
+                <div class="bg-gray-800/40 p-3 rounded-xl border border-gray-700/80 space-y-3">
+                    <h4 class="text-xs font-bold text-amber-400 flex items-center space-x-1">
+                        <i class="fa-solid fa-key"></i>
+                        <span>Binance API Credentials (Required for REAL mode)</span>
+                    </h4>
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">Binance API Key</label>
+                        <input type="text" id="cfg-api-key" placeholder="Enter Binance API Key" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-white focus:border-amber-500 font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">Binance API Secret</label>
+                        <input type="password" id="cfg-api-secret" placeholder="Enter Binance API Secret" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-white focus:border-amber-500 font-mono">
+                    </div>
+                </div>
+
+                <div class="flex items-center space-x-3 pt-1">
                     <input type="checkbox" id="cfg-telegram-close" class="w-4 h-4 rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-emerald-500">
-                    <label for="cfg-telegram-close" class="text-xs text-gray-300">Send Telegram notifications when paper trades close (WIN / LOSS)</label>
+                    <label for="cfg-telegram-close" class="text-xs text-gray-300">Send Telegram notifications when paper/real trades close</label>
                 </div>
 
                 <div class="flex justify-end space-x-3 pt-4 border-t border-gray-800">
@@ -327,6 +381,7 @@
         let pnlChartInstance = null;
         let outcomesChartInstance = null;
         let tradeHistoryData = [];
+        let selectedMode = 'PAPER';
 
         function formatDate(timeStr, ms) {
             if (ms) {
@@ -341,15 +396,76 @@
             }
         }
 
+        function updateModeBadge(mode) {
+            selectedMode = mode;
+            const container = document.getElementById('mode-badge-container');
+            const dot = document.getElementById('mode-dot');
+            const label = document.getElementById('mode-label');
+
+            if (mode === 'REAL') {
+                container.className = 'flex items-center px-3.5 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/40 text-amber-400 text-xs font-semibold cursor-pointer';
+                dot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400 mr-2 pulse-dot-amber';
+                label.textContent = 'REAL BINANCE LIVE';
+            } else {
+                container.className = 'flex items-center px-3.5 py-1.5 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-semibold cursor-pointer';
+                dot.className = 'w-2.5 h-2.5 rounded-full bg-cyan-400 mr-2 pulse-dot-green';
+                label.textContent = 'PAPER DEMO TRADING';
+            }
+        }
+
+        async function toggleMode() {
+            const nextMode = (selectedMode === 'PAPER') ? 'REAL' : 'PAPER';
+            if (nextMode === 'REAL') {
+                if (!confirm("Switch to REAL BINANCE LIVE trading mode? Real market orders will be placed via Binance API!")) {
+                    return;
+                }
+            }
+            try {
+                await fetch('/api/mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: nextMode })
+                });
+                updateModeBadge(nextMode);
+                fetchDashboardStats();
+            } catch (err) {
+                alert("Failed to switch mode: " + err);
+            }
+        }
+
+        function setModeForm(mode) {
+            const btnPaper = document.getElementById('btn-mode-paper');
+            const btnReal = document.getElementById('btn-mode-real');
+
+            if (mode === 'REAL') {
+                btnReal.className = 'py-2 px-3 rounded-lg text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40';
+                btnPaper.className = 'py-2 px-3 rounded-lg text-xs font-bold bg-gray-900 text-gray-400 border border-gray-700';
+            } else {
+                btnPaper.className = 'py-2 px-3 rounded-lg text-xs font-bold bg-cyan-500/20 text-cyan-400 border border-cyan-500/40';
+                btnReal.className = 'py-2 px-3 rounded-lg text-xs font-bold bg-gray-900 text-gray-400 border border-gray-700';
+            }
+            selectedMode = mode;
+        }
+
         async function fetchDashboardStats() {
             try {
                 const res = await fetch('/api/stats?days=30');
                 const data = await res.json();
 
-                // Update Metric Cards
-                const pnlEl = document.getElementById('stat-total-pnl');
-                pnlEl.textContent = (data.total_pnl_pct >= 0 ? '+' : '') + data.total_pnl_pct.toFixed(2) + '%';
-                pnlEl.className = 'text-3xl font-extrabold ' + (data.total_pnl_pct >= 0 ? 'text-emerald-400' : 'text-rose-400');
+                // Update Balance Cards
+                const balEl = document.getElementById('stat-paper-balance');
+                balEl.textContent = '$' + data.paper_balance.toFixed(2);
+
+                const pnlUsdtEl = document.getElementById('stat-total-pnl-usdt');
+                pnlUsdtEl.textContent = (data.total_pnl_usdt >= 0 ? '+$' : '-$') + Math.abs(data.total_pnl_usdt).toFixed(2);
+                pnlUsdtEl.className = data.total_pnl_usdt >= 0 ? 'text-emerald-400' : 'text-rose-400';
+
+                const pnlPctEl = document.getElementById('stat-total-pnl-pct');
+                pnlPctEl.textContent = (data.total_pnl_pct >= 0 ? '+' : '') + data.total_pnl_pct.toFixed(2) + '%';
+                pnlPctEl.className = data.total_pnl_pct >= 0 ? 'text-emerald-400' : 'text-rose-400';
+
+                document.getElementById('stat-profit-factor').textContent = data.profit_factor.toFixed(2);
+                document.getElementById('stat-max-dd').textContent = data.max_drawdown_pct.toFixed(2) + '%';
 
                 document.getElementById('stat-best-trade').textContent = '+' + data.best_trade.toFixed(1) + '%';
                 document.getElementById('stat-worst-trade').textContent = data.worst_trade.toFixed(1) + '%';
@@ -358,16 +474,8 @@
                 document.getElementById('stat-win-loss-ratio').textContent = `${data.wins}W / ${data.losses}L`;
                 document.getElementById('stat-win-bar').style.width = Math.min(100, Math.max(0, data.win_rate)) + '%';
 
-                document.getElementById('stat-total-signals').textContent = data.total_signals;
-                document.getElementById('stat-executed-trades').textContent = data.total_trades;
-                document.getElementById('stat-open-count').textContent = data.open_trades_count;
-                document.getElementById('stat-expired-count').textContent = data.expired;
-
-                document.getElementById('stat-avg-win').textContent = '+' + data.avg_win.toFixed(2) + '%';
-                document.getElementById('stat-avg-loss').textContent = data.avg_loss.toFixed(2) + '%';
-
                 // Update Charts
-                renderPnlChart(data.chart_dates, data.chart_pnl_cum);
+                renderPnlChart(data.chart_dates, data.chart_balance_history);
                 renderOutcomesChart(data.chart_dates, data.chart_wins, data.chart_losses);
 
             } catch (err) {
@@ -403,12 +511,15 @@
             tbody.innerHTML = trades.map(t => {
                 const pnlClass = (t.live_pnl_pct >= 0) ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold';
                 const cleanSym = t.symbol.replace('/USDT:USDT', '').replace('/USDT', '');
+                const execBadge = (t.execution_mode === 'REAL') ? '<span class="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px]">REAL</span>' : '<span class="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-400 text-[10px]">PAPER</span>';
                 
                 return `
                     <tr class="hover:bg-gray-800/40 transition">
                         <td class="py-3 px-4 font-bold text-white flex items-center space-x-2">
                             <span class="px-2 py-0.5 rounded bg-gray-800 text-xs text-cyan-400 font-mono">${cleanSym}</span>
+                            ${execBadge}
                         </td>
+                        <td class="py-3 px-4 text-xs font-mono text-gray-300">$${t.margin_usdt || 20} @ ${t.leverage || 5}x</td>
                         <td class="py-3 px-4 font-mono text-gray-300">$${Number(t.entry_price).toFixed(6)}</td>
                         <td class="py-3 px-4 font-mono text-white font-semibold">$${Number(t.current_price || t.entry_price).toFixed(6)}</td>
                         <td class="py-3 px-4 text-xs font-mono text-gray-400">
@@ -416,8 +527,10 @@
                             SL: <span class="text-rose-400">$${Number(t.sl_price).toFixed(6)}</span>
                         </td>
                         <td class="py-3 px-4 font-semibold text-emerald-400">+${Number(t.max_pump_pct || 0).toFixed(2)}%</td>
-                        <td class="py-3 px-4 font-mono ${pnlClass}">${(t.live_pnl_pct >= 0 ? '+' : '')}${t.live_pnl_pct.toFixed(2)}%</td>
-                        <td class="py-3 px-4 text-xs text-gray-400 font-mono">${formatDate(t.entry_time, t.entry_timestamp_ms)}</td>
+                        <td class="py-3 px-4 font-mono ${pnlClass}">
+                            ${(t.live_pnl_usdt >= 0 ? '+$' : '-$')}${Math.abs(t.live_pnl_usdt).toFixed(2)}<br>
+                            <span class="text-xs">(${(t.live_pnl_pct >= 0 ? '+' : '')}${t.live_pnl_pct.toFixed(2)}%)</span>
+                        </td>
                     </tr>
                 `;
             }).join('');
@@ -435,7 +548,7 @@
             });
 
             if (filtered.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="8" class="py-8 text-center text-gray-500 italic">No matching trade history found.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="9" class="py-8 text-center text-gray-500 italic">No matching trade history found.</td></tr>`;
                 return;
             }
 
@@ -446,16 +559,22 @@
                 else if (t.status === 'LOST') badgeColor = 'bg-rose-500/10 text-rose-400 border-rose-500/30';
 
                 const pnlClass = (t.pnl_pct >= 0) ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold';
+                const execBadge = (t.execution_mode === 'REAL') ? '<span class="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px]">REAL</span>' : '<span class="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-400 text-[10px]">PAPER</span>';
+                const pnlUsdt = t.pnl_usdt || 0.0;
 
                 return `
                     <tr class="hover:bg-gray-800/40 transition">
                         <td class="py-3 px-4 text-xs text-gray-400 font-mono">${formatDate(t.entry_time, t.entry_timestamp_ms)}</td>
                         <td class="py-3 px-4 font-bold text-white">${cleanSym}</td>
+                        <td class="py-3 px-4">${execBadge} <span class="text-xs font-mono text-gray-400">$${t.margin_usdt || 20}@${t.leverage || 5}x</span></td>
                         <td class="py-3 px-4 font-semibold text-cyan-400">${t.vol_spike ? t.vol_spike.toFixed(1) + 'x' : '-'}</td>
                         <td class="py-3 px-4 font-mono text-gray-300">$${Number(t.entry_price).toFixed(6)}</td>
                         <td class="py-3 px-4 font-mono text-gray-300">${t.exit_price ? '$' + Number(t.exit_price).toFixed(6) : '-'}</td>
                         <td class="py-3 px-4 font-semibold text-emerald-400">+${Number(t.max_pump_pct || 0).toFixed(2)}%</td>
-                        <td class="py-3 px-4 font-mono ${pnlClass}">${(t.pnl_pct >= 0 ? '+' : '')}${Number(t.pnl_pct || 0).toFixed(2)}%</td>
+                        <td class="py-3 px-4 font-mono ${pnlClass}">
+                            ${(pnlUsdt >= 0 ? '+$' : '-$')}${Math.abs(pnlUsdt).toFixed(2)}<br>
+                            <span class="text-xs">(${(t.pnl_pct >= 0 ? '+' : '')}${Number(t.pnl_pct || 0).toFixed(2)}%)</span>
+                        </td>
                         <td class="py-3 px-4">
                             <span class="px-2.5 py-1 rounded-full text-xs font-bold border ${badgeColor}">
                                 ${t.status}
@@ -480,7 +599,7 @@
                 data: {
                     labels: labels,
                     datasets: [{
-                        label: 'Cumulative PnL (%)',
+                        label: 'Portfolio Balance ($ USDT)',
                         data: data,
                         borderColor: '#10B981',
                         borderWidth: 2.5,
@@ -507,7 +626,7 @@
                             ticks: { 
                                 color: '#9CA3AF', 
                                 font: { size: 10 },
-                                callback: val => val + '%'
+                                callback: val => '$' + val
                             }
                         }
                     }
@@ -557,10 +676,17 @@
             try {
                 const res = await fetch('/api/settings');
                 const cfg = await res.json();
+                
+                setModeForm(cfg.execution_mode || 'PAPER');
+                document.getElementById('cfg-margin').value = cfg.trade_margin || '20';
+                document.getElementById('cfg-leverage').value = cfg.trade_leverage || '5';
+                document.getElementById('cfg-paper-capital').value = cfg.paper_initial_capital || '1000';
                 document.getElementById('cfg-tp').value = cfg.tp_pct || '2.0';
                 document.getElementById('cfg-sl').value = cfg.sl_pct || '1.0';
                 document.getElementById('cfg-hold').value = cfg.hold_time_mins || '30';
                 document.getElementById('cfg-spike').value = cfg.min_spike_multiplier || '5.0';
+                document.getElementById('cfg-api-key').value = cfg.binance_api_key || '';
+                document.getElementById('cfg-api-secret').value = cfg.binance_api_secret || '';
                 document.getElementById('cfg-telegram-close').checked = (cfg.send_telegram_trade_close === 'true');
                 
                 document.getElementById('settings-modal').classList.remove('hidden');
@@ -576,10 +702,16 @@
         async function saveSettings(e) {
             e.preventDefault();
             const payload = {
+                execution_mode: selectedMode,
+                trade_margin: document.getElementById('cfg-margin').value,
+                trade_leverage: document.getElementById('cfg-leverage').value,
+                paper_initial_capital: document.getElementById('cfg-paper-capital').value,
                 tp_pct: document.getElementById('cfg-tp').value,
                 sl_pct: document.getElementById('cfg-sl').value,
                 hold_time_mins: document.getElementById('cfg-hold').value,
                 min_spike_multiplier: document.getElementById('cfg-spike').value,
+                binance_api_key: document.getElementById('cfg-api-key').value,
+                binance_api_secret: document.getElementById('cfg-api-secret').value,
                 send_telegram_trade_close: document.getElementById('cfg-telegram-close').checked ? 'true' : 'false'
             };
 
@@ -589,6 +721,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
+                updateModeBadge(selectedMode);
                 closeSettingsModal();
                 fetchDashboardStats();
             } catch (err) {

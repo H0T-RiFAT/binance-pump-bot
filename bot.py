@@ -21,7 +21,8 @@ TIMEFRAME = '1m'
 MA_PERIOD = 20
 TOP_N_COINS = 50
 
-exchange = ccxt.binance({
+# Public Market Data Exchange Instance
+public_exchange = ccxt.binance({
     'enableRateLimit': True,
     'rateLimit': 1500,
     'options': {'defaultType': 'future'},
@@ -29,6 +30,20 @@ exchange = ccxt.binance({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
 })
+
+def get_real_binance_exchange():
+    api_key = os.environ.get("BINANCE_API_KEY") or database.get_setting('binance_api_key', '')
+    secret_key = os.environ.get("BINANCE_API_SECRET") or database.get_setting('binance_api_secret', '')
+    
+    if not api_key or not secret_key:
+        return None
+
+    return ccxt.binance({
+        'apiKey': api_key,
+        'secret': secret_key,
+        'enableRateLimit': True,
+        'options': {'defaultType': 'future'}
+    })
 
 def send_telegram_alert(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -78,14 +93,19 @@ def get_trades():
     # Calculate live current price and PnL for open trades
     for trade in open_trades:
         try:
-            ticker = exchange.fetch_ticker(trade['symbol'])
+            ticker = public_exchange.fetch_ticker(trade['symbol'])
             curr_price = ticker.get('last', trade['entry_price'])
             pnl_pct = ((curr_price - trade['entry_price']) / trade['entry_price']) * 100.0
+            margin = trade.get('margin_usdt', 20.0) or 20.0
+            lev = trade.get('leverage', 5) or 5
+            
             trade['current_price'] = curr_price
             trade['live_pnl_pct'] = round(pnl_pct, 2)
+            trade['live_pnl_usdt'] = round(margin * lev * (pnl_pct / 100.0), 2)
         except Exception:
             trade['current_price'] = trade['entry_price']
             trade['live_pnl_pct'] = 0.0
+            trade['live_pnl_usdt'] = 0.0
 
     history = database.get_trade_history(limit)
     return jsonify({
@@ -97,18 +117,39 @@ def get_trades():
 def handle_settings():
     if request.method == 'POST':
         data = request.json or {}
-        for key in ['tp_pct', 'sl_pct', 'hold_time_mins', 'min_spike_multiplier', 'send_telegram_trade_close']:
-            if key in data:
+        allowed_keys = [
+            'tp_pct', 'sl_pct', 'hold_time_mins', 'min_spike_multiplier', 
+            'send_telegram_trade_close', 'execution_mode', 'paper_initial_capital',
+            'trade_margin', 'trade_leverage', 'max_open_trades',
+            'binance_api_key', 'binance_api_secret'
+        ]
+        for key in allowed_keys:
+            if key in data and data[key] is not None:
                 database.set_setting(key, data[key])
+                
         return jsonify({'status': 'success', 'settings': database.get_all_settings()})
     else:
         return jsonify(database.get_all_settings())
+
+@app.route('/api/mode', methods=['GET', 'POST'])
+def handle_mode():
+    if request.method == 'POST':
+        data = request.json or {}
+        new_mode = data.get('mode', 'PAPER').upper()
+        if new_mode in ('PAPER', 'REAL'):
+            database.set_setting('execution_mode', new_mode)
+            print(f"[SYSTEM MODE] Execution mode updated to: {new_mode}")
+            return jsonify({'status': 'success', 'execution_mode': new_mode})
+        return jsonify({'status': 'error', 'message': 'Invalid mode'}), 400
+    else:
+        current_mode = database.get_setting('execution_mode', 'PAPER')
+        return jsonify({'execution_mode': current_mode})
 
 # ==================== BACKGROUND MONITORING ENGINE ====================
 
 def get_binance_top_coins(limit=50):
     try:
-        tickers = exchange.fetch_tickers()
+        tickers = public_exchange.fetch_tickers()
         usdt_pairs = []
         for symbol, ticker in tickers.items():
             if symbol.endswith('/USDT:USDT') or symbol.endswith('/USDT'):
@@ -133,6 +174,43 @@ def calculate_score_and_stars(vol_spike):
     else:
         return 5, 5, "EARLY SPIKE DETECTED 👀"
 
+def execute_trade_on_binance_real(symbol, entry_price, tp_price, sl_price, margin_usdt, leverage):
+    """Executes a Real Market Long Order on Binance Futures with TP & SL orders."""
+    real_ex = get_real_binance_exchange()
+    if not real_ex:
+        print(f"[REAL TRADE ERROR] Missing Binance API Key or Secret!")
+        return None
+
+    try:
+        clean_sym = symbol.split(':')[0]
+        # 1. Set leverage on Binance
+        try:
+            real_ex.set_leverage(int(leverage), clean_sym)
+        except Exception as e:
+            print(f"[REAL TRADE WARN] Could not set leverage: {e}")
+
+        # 2. Calculate quantity based on margin * leverage / price
+        notional = float(margin_usdt) * int(leverage)
+        amount = notional / float(entry_price)
+
+        # 3. Create Market Buy (Long) Order
+        order = real_ex.create_market_buy_order(clean_sym, amount)
+        order_id = order.get('id')
+        print(f"[REAL TRADE EXECUTED] {clean_sym} Long Market Order ID: {order_id} | Amount: {amount:.4f}")
+
+        # 4. Attach Take Profit & Stop Loss Orders
+        try:
+            real_ex.create_order(clean_sym, 'TAKE_PROFIT_MARKET', 'sell', amount, None, {'stopPrice': tp_price, 'reduceOnly': True})
+            real_ex.create_order(clean_sym, 'STOP_MARKET', 'sell', amount, None, {'stopPrice': sl_price, 'reduceOnly': True})
+        except Exception as e_ord:
+            print(f"[REAL TRADE WARN] Could not attach TP/SL bracket orders on Binance: {e_ord}")
+
+        return order_id
+
+    except Exception as e:
+        print(f"[REAL TRADE FAILED] Failed to place order on Binance for {symbol}: {e}")
+        return None
+
 def monitor_open_trades():
     open_trades = database.get_open_trades()
     if not open_trades:
@@ -155,11 +233,11 @@ def monitor_open_trades():
                 entry_ms = int(dt.timestamp() * 1000)
 
             # Fetch 1m candles starting slightly before entry_ms
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1m', since=entry_ms - 60000)
+            ohlcv = public_exchange.fetch_ohlcv(symbol, timeframe='1m', since=entry_ms - 60000)
             if not ohlcv:
                 continue
 
-            # Strict filter: ONLY evaluate candles from the trade entry minute onward
+            # Strict filter: ONLY evaluate candles from trade entry minute onward
             valid_candles = [c for c in ohlcv if c[0] >= (entry_ms - 30000)]
             if not valid_candles:
                 continue
@@ -194,18 +272,25 @@ def monitor_open_trades():
             # Update max/min extremes in DB
             database.update_open_trade_extremes(trade_id, max_price_so_far, min_price_so_far, max_pump_pct)
 
+            margin = trade.get('margin_usdt', 20.0) or 20.0
+            lev = trade.get('leverage', 5) or 5
+            exec_mode = trade.get('execution_mode', 'PAPER')
+
             # 1. Check Take Profit Hit
             if hit_tp:
                 tp_pct_val = float(database.get_setting('tp_pct', '2.0'))
+                pnl_usdt = round(margin * lev * (tp_pct_val / 100.0), 2)
+
                 database.close_trade(trade_id, 'WON', exit_price, tp_pct_val, max_price_so_far, max_pump_pct)
-                print(f"[TRADE WON] {symbol} hit TP target at ${exit_price:.6f} (+{tp_pct_val}%)")
+                print(f"[TRADE WON] [{exec_mode}] {symbol} hit TP target at ${exit_price:.6f} (+{tp_pct_val}%, +${pnl_usdt})")
                 if send_close_alert:
                     clean_sym = symbol.split('/')[0] + "USDT"
                     send_telegram_alert(
-                        f"🎯 *TRADE CLOSED [WIN] • {clean_sym}*\n\n"
+                        f"🎯 *TRADE CLOSED [WIN] • {clean_sym}* `[{exec_mode}]`\n\n"
                         f"Status: *TAKE PROFIT HIT* 🚀\n"
                         f"Entry: `${entry_price:.6f}` | Exit: `${exit_price:.6f}`\n"
-                        f"PnL: `+{tp_pct_val:.2f}%` | Max Pump: `+{max_pump_pct:.2f}%`"
+                        f"PnL: `+{tp_pct_val:.2f}%` (`+${pnl_usdt:.2f} USDT`)\n"
+                        f"Max Pump: `+{max_pump_pct:.2f}%` | Margin: `${margin:.0f} @ {lev}x`"
                     )
                 continue
 
@@ -213,15 +298,18 @@ def monitor_open_trades():
             if hit_sl:
                 sl_pct_val = float(database.get_setting('sl_pct', '1.0'))
                 pnl_pct = -abs(sl_pct_val)
+                pnl_usdt = round(margin * lev * (pnl_pct / 100.0), 2)
+
                 database.close_trade(trade_id, 'LOST', exit_price, pnl_pct, max_price_so_far, max_pump_pct)
-                print(f"[TRADE LOST] {symbol} hit SL target at ${exit_price:.6f} ({pnl_pct}%)")
+                print(f"[TRADE LOST] [{exec_mode}] {symbol} hit SL target at ${exit_price:.6f} ({pnl_pct}%, ${pnl_usdt})")
                 if send_close_alert:
                     clean_sym = symbol.split('/')[0] + "USDT"
                     send_telegram_alert(
-                        f"🔻 *TRADE CLOSED [LOSS] • {clean_sym}*\n\n"
+                        f"🔻 *TRADE CLOSED [LOSS] • {clean_sym}* `[{exec_mode}]`\n\n"
                         f"Status: *STOP LOSS HIT* 🛑\n"
                         f"Entry: `${entry_price:.6f}` | Exit: `${exit_price:.6f}`\n"
-                        f"PnL: `{pnl_pct:.2f}%` | Max Pump: `+{max_pump_pct:.2f}%`"
+                        f"PnL: `{pnl_pct:.2f}%` (`${pnl_usdt:.2f} USDT`)\n"
+                        f"Max Pump: `+{max_pump_pct:.2f}%` | Margin: `${margin:.0f} @ {lev}x`"
                     )
                 continue
 
@@ -230,16 +318,19 @@ def monitor_open_trades():
             elapsed_mins = (now_ms - entry_ms) / 60000.0
             if elapsed_mins >= hold_mins:
                 pnl_pct = ((latest_close - entry_price) / entry_price) * 100.0
+                pnl_usdt = round(margin * lev * (pnl_pct / 100.0), 2)
                 status = 'WON' if pnl_pct > 0 else ('LOST' if pnl_pct < 0 else 'EXPIRED')
+
                 database.close_trade(trade_id, status, latest_close, round(pnl_pct, 2), max_price_so_far, max_pump_pct)
-                print(f"[TRADE EXPIRED] {symbol} closed at hold limit ({hold_mins}m): PnL {pnl_pct:.2f}%")
+                print(f"[TRADE EXPIRED] [{exec_mode}] {symbol} closed at hold limit ({hold_mins}m): PnL {pnl_pct:.2f}% (${pnl_usdt})")
                 if send_close_alert:
                     clean_sym = symbol.split('/')[0] + "USDT"
                     send_telegram_alert(
-                        f"⏱️ *TRADE CLOSED [{status}] • {clean_sym}*\n\n"
+                        f"⏱️ *TRADE CLOSED [{status}] • {clean_sym}* `[{exec_mode}]`\n\n"
                         f"Status: *{status} (TIME LIMIT)*\n"
                         f"Entry: `${entry_price:.6f}` | Exit: `${latest_close:.6f}`\n"
-                        f"PnL: `{pnl_pct:+.2f}%` | Max Pump: `+{max_pump_pct:.2f}%`"
+                        f"PnL: `{pnl_pct:+.2f}%` (`{pnl_usdt:+.2f} USDT`)\n"
+                        f"Max Pump: `+{max_pump_pct:.2f}%` | Margin: `${margin:.0f} @ {lev}x`"
                     )
 
         except Exception as e:
@@ -251,10 +342,18 @@ def scan_binance_market():
     if not coins:
         return
 
+    # Check Max Open Trades Limit
+    max_open = int(database.get_setting('max_open_trades', '3'))
+    current_open_trades = database.get_open_trades()
+
     for symbol in coins:
         try:
+            # Re-check open trade limit dynamically
+            if len(database.get_open_trades()) >= max_open:
+                break
+
             time.sleep(0.1)
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=MA_PERIOD + 1)
+            ohlcv = public_exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=MA_PERIOD + 1)
             if len(ohlcv) < MA_PERIOD + 1:
                 continue
 
@@ -276,6 +375,14 @@ def scan_binance_market():
                 score, stars, status_label = calculate_score_and_stars(vol_spike)
                 clean_symbol = symbol.split('/')[0] + "USDT"
 
+                # Fetch strategy parameters
+                tp_pct = float(database.get_setting('tp_pct', '2.0'))
+                sl_pct = float(database.get_setting('sl_pct', '1.0'))
+                hold_mins = int(database.get_setting('hold_time_mins', '30'))
+                margin_usdt = float(database.get_setting('trade_margin', '20.0'))
+                leverage = int(database.get_setting('trade_leverage', '5'))
+                exec_mode = database.get_setting('execution_mode', 'PAPER').upper()
+
                 # 1. Save signal to DB
                 signal_id = database.add_signal(
                     symbol=symbol,
@@ -289,35 +396,46 @@ def scan_binance_market():
                     current_vol_usdt=current_vol_usdt
                 )
 
-                # 2. Automatically create simulated Paper Trade execution
-                tp_pct = float(database.get_setting('tp_pct', '2.0'))
-                sl_pct = float(database.get_setting('sl_pct', '1.0'))
-                hold_mins = int(database.get_setting('hold_time_mins', '30'))
+                real_order_id = None
 
+                # 2. Execute on Binance if mode is REAL
+                if exec_mode == 'REAL':
+                    tp_price = current_price * (1 + tp_pct / 100.0)
+                    sl_price = current_price * (1 - sl_pct / 100.0)
+                    real_order_id = execute_trade_on_binance_real(symbol, current_price, tp_price, sl_price, margin_usdt, leverage)
+
+                # 3. Save trade entry to DB
                 database.create_trade(
                     signal_id=signal_id,
                     symbol=symbol,
                     entry_price=current_price,
                     tp_pct=tp_pct,
                     sl_pct=sl_pct,
-                    hold_time_mins=hold_mins
+                    hold_time_mins=hold_mins,
+                    margin_usdt=margin_usdt,
+                    leverage=leverage,
+                    execution_mode=exec_mode,
+                    real_order_id=real_order_id
                 )
 
-                # 3. Send Telegram Pre-Pump Signal Alert
+                # 4. Send Telegram Pre-Pump Signal Alert
                 star_str = "⭐" * stars
+                mode_badge = "🟢 *PAPER DEMO*" if exec_mode == 'PAPER' else "⚡ *REAL BINANCE LIVE*"
+
                 telegram_msg = (
                     f"🚨 *PRE-PUMP ALERT • {clean_symbol}* `[{TIMEFRAME}]`\n"
-                    f"💥 *{status_label}*\n\n"
+                    f"💥 *{status_label}*\n"
+                    f"Mode: {mode_badge}\n\n"
                     f"Stars: {star_str}\n"
                     f"Entry: `${current_price:.6f}`\n"
                     f"Volume Spike: *{vol_spike:.1f}x avg*\n"
-                    f"Avg Vol (20x1m): `${avg_vol_usdt/1000:.1f}k` | Current: `${current_vol_usdt/1000000:.2f}m`\n"
-                    f"Price Change: `+{price_change:.2f}%`\n\n"
-                    f"📈 *Signal Score:* `{score}/10` | *Target TP:* `+{tp_pct}%` | *SL:* `-{sl_pct}%`\n"
+                    f"Margin & Leverage: `${margin_usdt:.0f} @ {leverage}x`\n"
+                    f"Target TP: `+{tp_pct}%` | SL: `-{sl_pct}%`\n\n"
+                    f"📈 *Signal Score:* `{score}/10`\n"
                     f"----------------------------------------"
                 )
 
-                print(f"[SPIKE FOUND] {clean_symbol} - Volume Spike: {vol_spike:.1f}x (Trade execution started)")
+                print(f"[SPIKE FOUND] [{exec_mode}] {clean_symbol} - Spike: {vol_spike:.1f}x (Margin: ${margin_usdt} @ {leverage}x)")
                 send_telegram_alert(telegram_msg)
 
         except Exception:
@@ -343,11 +461,14 @@ def keep_alive_worker():
             print(f"[KEEP-ALIVE] Ping failed: {e}")
 
 def background_loop():
+    exec_mode = database.get_setting('execution_mode', 'PAPER')
     startup_msg = (
         "🚀 *Binance Pre-Pump Scanner & Overview System Started!*\n\n"
+        f"• *Execution Mode:* `{exec_mode}`\n"
         f"• *Timeframe:* `{TIMEFRAME}`\n"
         f"• *Scan Scope:* Top `{TOP_N_COINS}` Binance Pairs\n"
         f"• *Min Spike Trigger:* `{database.get_setting('min_spike_multiplier', '5.0')}x`\n"
+        f"• *Margin / Leverage:* `${database.get_setting('trade_margin', '20.0')} @ {database.get_setting('trade_leverage', '5')}x`\n"
         f"• *Dashboard:* `{RENDER_EXTERNAL_URL}`\n\n"
         "🟢 Scanner & 24/7 Execution Tracking is active..."
     )
