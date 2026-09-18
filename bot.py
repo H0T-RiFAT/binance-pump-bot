@@ -87,7 +87,11 @@ def get_signals():
 
 @app.route('/api/trades')
 def get_trades():
-    limit = request.args.get('limit', 100, type=int)
+    page = request.args.get('page', 1, type=int)
+    limit = request.args.get('limit', 25, type=int)
+    status_filter = request.args.get('filter', 'ALL', type=str)
+    search = request.args.get('search', '', type=str)
+
     open_trades = database.get_open_trades()
     
     # Calculate live current price and PnL for open trades
@@ -107,10 +111,16 @@ def get_trades():
             trade['live_pnl_pct'] = 0.0
             trade['live_pnl_usdt'] = 0.0
 
-    history = database.get_trade_history(limit)
+    history_data = database.get_trade_history_paginated(page=page, limit=limit, status_filter=status_filter, search=search)
     return jsonify({
         'open_trades': open_trades,
-        'history': history
+        'history': history_data['trades'],
+        'pagination': {
+            'total_trades': history_data['total_trades'],
+            'total_pages': history_data['total_pages'],
+            'current_page': history_data['current_page'],
+            'limit': history_data['limit']
+        }
     })
 
 @app.route('/api/settings', methods=['GET', 'POST'])
@@ -183,22 +193,18 @@ def execute_trade_on_binance_real(symbol, entry_price, tp_price, sl_price, margi
 
     try:
         clean_sym = symbol.split(':')[0]
-        # 1. Set leverage on Binance
         try:
             real_ex.set_leverage(int(leverage), clean_sym)
         except Exception as e:
             print(f"[REAL TRADE WARN] Could not set leverage: {e}")
 
-        # 2. Calculate quantity based on margin * leverage / price
         notional = float(margin_usdt) * int(leverage)
         amount = notional / float(entry_price)
 
-        # 3. Create Market Buy (Long) Order
         order = real_ex.create_market_buy_order(clean_sym, amount)
         order_id = order.get('id')
         print(f"[REAL TRADE EXECUTED] {clean_sym} Long Market Order ID: {order_id} | Amount: {amount:.4f}")
 
-        # 4. Attach Take Profit & Stop Loss Orders
         try:
             real_ex.create_order(clean_sym, 'TAKE_PROFIT_MARKET', 'sell', amount, None, {'stopPrice': tp_price, 'reduceOnly': True})
             real_ex.create_order(clean_sym, 'STOP_MARKET', 'sell', amount, None, {'stopPrice': sl_price, 'reduceOnly': True})
@@ -232,12 +238,10 @@ def monitor_open_trades():
                 dt = datetime.strptime(trade['entry_time'], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
                 entry_ms = int(dt.timestamp() * 1000)
 
-            # Fetch 1m candles starting slightly before entry_ms
             ohlcv = public_exchange.fetch_ohlcv(symbol, timeframe='1m', since=entry_ms - 60000)
             if not ohlcv:
                 continue
 
-            # Strict filter: ONLY evaluate candles from trade entry minute onward
             valid_candles = [c for c in ohlcv if c[0] >= (entry_ms - 30000)]
             if not valid_candles:
                 continue
@@ -256,7 +260,6 @@ def monitor_open_trades():
                 max_price_so_far = max(max_price_so_far, c_high)
                 min_price_so_far = min(min_price_so_far, c_low)
 
-                # Check if this candle hit TP or SL
                 if c_high >= tp_price:
                     hit_tp = True
                     exit_price = tp_price
@@ -269,7 +272,6 @@ def monitor_open_trades():
             latest_close = valid_candles[-1][4]
             max_pump_pct = ((max_price_so_far - entry_price) / entry_price) * 100.0
 
-            # Update max/min extremes in DB
             database.update_open_trade_extremes(trade_id, max_price_so_far, min_price_so_far, max_pump_pct)
 
             margin = trade.get('margin_usdt', 20.0) or 20.0
@@ -290,7 +292,7 @@ def monitor_open_trades():
                         f"Status: *TAKE PROFIT HIT* 🚀\n"
                         f"Entry: `${entry_price:.6f}` | Exit: `${exit_price:.6f}`\n"
                         f"PnL: `+{tp_pct_val:.2f}%` (`+${pnl_usdt:.2f} USDT`)\n"
-                        f"Max Pump: `+{max_pump_pct:.2f}%` | Margin: `${margin:.0f} @ {lev}x`"
+                        f"Max Pump: `+{max_pump_pct:.2f}%` | Margin: `${margin:.1f} @ {lev}x`"
                     )
                 continue
 
@@ -309,7 +311,7 @@ def monitor_open_trades():
                         f"Status: *STOP LOSS HIT* 🛑\n"
                         f"Entry: `${entry_price:.6f}` | Exit: `${exit_price:.6f}`\n"
                         f"PnL: `{pnl_pct:.2f}%` (`${pnl_usdt:.2f} USDT`)\n"
-                        f"Max Pump: `+{max_pump_pct:.2f}%` | Margin: `${margin:.0f} @ {lev}x`"
+                        f"Max Pump: `+{max_pump_pct:.2f}%` | Margin: `${margin:.1f} @ {lev}x`"
                     )
                 continue
 
@@ -330,7 +332,7 @@ def monitor_open_trades():
                         f"Status: *{status} (TIME LIMIT)*\n"
                         f"Entry: `${entry_price:.6f}` | Exit: `${latest_close:.6f}`\n"
                         f"PnL: `{pnl_pct:+.2f}%` (`{pnl_usdt:+.2f} USDT`)\n"
-                        f"Max Pump: `+{max_pump_pct:.2f}%` | Margin: `${margin:.0f} @ {lev}x`"
+                        f"Max Pump: `+{max_pump_pct:.2f}%` | Margin: `${margin:.1f} @ {lev}x`"
                     )
 
         except Exception as e:
@@ -342,13 +344,10 @@ def scan_binance_market():
     if not coins:
         return
 
-    # Check Max Open Trades Limit
     max_open = int(database.get_setting('max_open_trades', '3'))
-    current_open_trades = database.get_open_trades()
 
     for symbol in coins:
         try:
-            # Re-check open trade limit dynamically
             if len(database.get_open_trades()) >= max_open:
                 break
 
@@ -375,7 +374,6 @@ def scan_binance_market():
                 score, stars, status_label = calculate_score_and_stars(vol_spike)
                 clean_symbol = symbol.split('/')[0] + "USDT"
 
-                # Fetch strategy parameters
                 tp_pct = float(database.get_setting('tp_pct', '2.0'))
                 sl_pct = float(database.get_setting('sl_pct', '1.0'))
                 hold_mins = int(database.get_setting('hold_time_mins', '30'))
@@ -429,7 +427,7 @@ def scan_binance_market():
                     f"Stars: {star_str}\n"
                     f"Entry: `${current_price:.6f}`\n"
                     f"Volume Spike: *{vol_spike:.1f}x avg*\n"
-                    f"Margin & Leverage: `${margin_usdt:.0f} @ {leverage}x`\n"
+                    f"Margin & Leverage: `${margin_usdt:.1f} @ {leverage}x`\n"
                     f"Target TP: `+{tp_pct}%` | SL: `-{sl_pct}%`\n\n"
                     f"📈 *Signal Score:* `{score}/10`\n"
                     f"----------------------------------------"
@@ -442,7 +440,6 @@ def scan_binance_market():
             time.sleep(0.5)
             continue
 
-    # After market scan, monitor all active open trades
     monitor_open_trades()
 
 def keep_alive_worker():
@@ -474,7 +471,6 @@ def background_loop():
     )
     send_telegram_alert(startup_msg)
 
-    # Start keep alive thread
     threading.Thread(target=keep_alive_worker, daemon=True).start()
 
     while True:
@@ -485,10 +481,8 @@ def background_loop():
         time.sleep(60)
 
 if __name__ == "__main__":
-    # Start scanner loop in a background thread
     threading.Thread(target=background_loop, daemon=True).start()
 
-    # Run Flask Web Application
     port = int(os.environ.get("PORT", 10000))
     print(f"Starting Overview Dashboard Server on port {port}...")
     app.run(host='0.0.0.0', port=port)

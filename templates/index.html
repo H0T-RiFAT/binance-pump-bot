@@ -239,23 +239,23 @@
             </div>
         </div>
 
-        <!-- 30-Day Executed Trade History & Signal Log -->
+        <!-- Full Multi-Page Trade History & Position Log -->
         <div class="glass-card rounded-2xl p-6 shadow-xl">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-gray-800 gap-4">
                 <div>
-                    <h2 class="text-lg font-bold text-gray-100">30-Day Trade History & Position Log</h2>
-                    <p class="text-xs text-gray-400">Binance Futures execution records with exact USDT & % return</p>
+                    <h2 class="text-lg font-bold text-gray-100">Full Multi-Page Trade History</h2>
+                    <p class="text-xs text-gray-400">Complete execution record of all trades from Day 1</p>
                 </div>
 
                 <div class="flex items-center space-x-3">
-                    <select id="history-filter" onchange="renderTradeHistoryTable()" class="bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500">
+                    <select id="history-filter" onchange="onFilterOrSearchChange()" class="bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500">
                         <option value="ALL">All Trades</option>
                         <option value="WON">Only Wins (WON)</option>
                         <option value="LOST">Only Losses (LOST)</option>
                         <option value="EXPIRED">Expired</option>
                     </select>
 
-                    <input type="text" id="history-search" onkeyup="renderTradeHistoryTable()" placeholder="Search symbol..." class="bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500 w-36 sm:w-48">
+                    <input type="text" id="history-search" onkeyup="onFilterOrSearchChange()" placeholder="Search symbol..." class="bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded-lg px-3 py-2 focus:ring-2 focus:ring-emerald-500 w-36 sm:w-48">
                 </div>
             </div>
 
@@ -280,6 +280,24 @@
                         </tr>
                     </tbody>
                 </table>
+            </div>
+
+            <!-- Multi-Page Pagination Bar Footer -->
+            <div class="flex flex-col sm:flex-row items-center justify-between pt-4 mt-4 border-t border-gray-800 gap-4">
+                <div class="flex items-center space-x-2 text-xs text-gray-400">
+                    <span>Show:</span>
+                    <select id="page-limit-select" onchange="changePageLimit(this.value)" class="bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded px-2 py-1 focus:ring-1 focus:ring-emerald-500">
+                        <option value="10">10 per page</option>
+                        <option value="25" selected>25 per page</option>
+                        <option value="50">50 per page</option>
+                        <option value="100">100 per page</option>
+                    </select>
+                    <span id="pagination-summary-text" class="ml-2 font-mono">Showing 0 of 0 trades</span>
+                </div>
+
+                <div id="pagination-controls" class="flex items-center space-x-1">
+                    <!-- Dynamic Page Buttons inserted by JS -->
+                </div>
             </div>
         </div>
 
@@ -312,7 +330,7 @@
                 <div class="grid grid-cols-3 gap-3">
                     <div>
                         <label class="block text-xs font-medium text-gray-400 mb-1">Margin ($ USDT)</label>
-                        <input type="number" step="5" id="cfg-margin" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:border-emerald-500" required>
+                        <input type="number" step="0.1" min="0.1" id="cfg-margin" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:border-emerald-500" required>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-400 mb-1">Leverage (x)</label>
@@ -383,6 +401,12 @@
         let tradeHistoryData = [];
         let selectedMode = 'PAPER';
 
+        // Pagination State
+        let currentPage = 1;
+        let pageLimit = 25;
+        let totalPages = 1;
+        let totalTrades = 0;
+
         function formatDate(timeStr, ms) {
             if (ms) {
                 return new Date(ms).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
@@ -410,6 +434,19 @@
                 container.className = 'flex items-center px-3.5 py-1.5 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-semibold cursor-pointer';
                 dot.className = 'w-2.5 h-2.5 rounded-full bg-cyan-400 mr-2 pulse-dot-green';
                 label.textContent = 'PAPER DEMO TRADING';
+            }
+        }
+
+        async function fetchSettingsConfig() {
+            try {
+                const res = await fetch('/api/settings');
+                const cfg = await res.json();
+                
+                updateModeBadge(cfg.execution_mode || 'PAPER');
+                document.getElementById('cfg-disp-margin').textContent = '$' + (cfg.trade_margin || '20') + ' USDT';
+                document.getElementById('cfg-disp-leverage').textContent = (cfg.trade_leverage || '5') + 'x';
+            } catch (err) {
+                console.error("Error fetching settings:", err);
             }
         }
 
@@ -458,11 +495,11 @@
 
                 const pnlUsdtEl = document.getElementById('stat-total-pnl-usdt');
                 pnlUsdtEl.textContent = (data.total_pnl_usdt >= 0 ? '+$' : '-$') + Math.abs(data.total_pnl_usdt).toFixed(2);
-                pnlUsdtEl.className = data.total_pnl_usdt >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                pnlUsdtEl.className = data.total_pnl_usdt >= 0 ? 'text-emerald-400 font-extrabold' : 'text-rose-400 font-extrabold';
 
                 const pnlPctEl = document.getElementById('stat-total-pnl-pct');
                 pnlPctEl.textContent = (data.total_pnl_pct >= 0 ? '+' : '') + data.total_pnl_pct.toFixed(2) + '%';
-                pnlPctEl.className = data.total_pnl_pct >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                pnlPctEl.className = data.total_pnl_pct >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold';
 
                 document.getElementById('stat-profit-factor').textContent = data.profit_factor.toFixed(2);
                 document.getElementById('stat-max-dd').textContent = data.max_drawdown_pct.toFixed(2) + '%';
@@ -485,16 +522,89 @@
 
         async function fetchTradesData() {
             try {
-                const res = await fetch('/api/trades?limit=100');
+                const filter = document.getElementById('history-filter').value;
+                const search = document.getElementById('history-search').value.trim();
+
+                const url = `/api/trades?page=${currentPage}&limit=${pageLimit}&filter=${encodeURIComponent(filter)}&search=${encodeURIComponent(search)}`;
+                const res = await fetch(url);
                 const data = await res.json();
 
                 renderOpenTradesTable(data.open_trades || []);
                 tradeHistoryData = data.history || [];
+                
+                if (data.pagination) {
+                    totalTrades = data.pagination.total_trades;
+                    totalPages = data.pagination.total_pages;
+                    currentPage = data.pagination.current_page;
+                }
+
                 renderTradeHistoryTable();
+                renderPaginationControls();
 
             } catch (err) {
                 console.error("Error fetching trades:", err);
             }
+        }
+
+        function onFilterOrSearchChange() {
+            currentPage = 1;
+            fetchTradesData();
+        }
+
+        function changePage(page) {
+            if (page < 1 || page > totalPages) return;
+            currentPage = page;
+            fetchTradesData();
+        }
+
+        function changePageLimit(newLimit) {
+            pageLimit = parseInt(newLimit);
+            currentPage = 1;
+            fetchTradesData();
+        }
+
+        function renderPaginationControls() {
+            const container = document.getElementById('pagination-controls');
+            const summary = document.getElementById('pagination-summary-text');
+
+            const startIdx = totalTrades === 0 ? 0 : (currentPage - 1) * pageLimit + 1;
+            const endIdx = Math.min(totalTrades, currentPage * pageLimit);
+            summary.textContent = `Showing ${startIdx} to ${endIdx} of ${totalTrades} trades (Page ${currentPage} of ${totalPages})`;
+
+            if (totalPages <= 1) {
+                container.innerHTML = '';
+                return;
+            }
+
+            let html = '';
+            // Prev Button
+            const prevDisabled = currentPage === 1 ? 'disabled opacity-40 cursor-not-allowed' : '';
+            html += `<button onclick="changePage(${currentPage - 1})" ${prevDisabled} class="px-2.5 py-1 rounded bg-gray-800 hover:bg-gray-700 text-xs font-semibold text-gray-300 border border-gray-700"><i class="fa-solid fa-chevron-left mr-1"></i>Prev</button>`;
+
+            // Page numbers
+            let startPage = Math.max(1, currentPage - 2);
+            let endPage = Math.min(totalPages, currentPage + 2);
+
+            if (startPage > 1) {
+                html += `<button onclick="changePage(1)" class="px-2.5 py-1 rounded bg-gray-800 text-xs text-gray-300 border border-gray-700">1</button>`;
+                if (startPage > 2) html += `<span class="text-xs text-gray-500 px-1">...</span>`;
+            }
+
+            for (let p = startPage; p <= endPage; p++) {
+                const activeStyle = p === currentPage ? 'bg-emerald-600 text-white font-bold border-emerald-500' : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700';
+                html += `<button onclick="changePage(${p})" class="px-2.5 py-1 rounded text-xs border ${activeStyle}">${p}</button>`;
+            }
+
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) html += `<span class="text-xs text-gray-500 px-1">...</span>`;
+                html += `<button onclick="changePage(${totalPages})" class="px-2.5 py-1 rounded bg-gray-800 text-xs text-gray-300 border border-gray-700">${totalPages}</button>`;
+            }
+
+            // Next Button
+            const nextDisabled = currentPage === totalPages ? 'disabled opacity-40 cursor-not-allowed' : '';
+            html += `<button onclick="changePage(${currentPage + 1})" ${nextDisabled} class="px-2.5 py-1 rounded bg-gray-800 hover:bg-gray-700 text-xs font-semibold text-gray-300 border border-gray-700">Next<i class="fa-solid fa-chevron-right ml-1"></i></button>`;
+
+            container.innerHTML = html;
         }
 
         function renderOpenTradesTable(trades) {
@@ -538,21 +648,13 @@
 
         function renderTradeHistoryTable() {
             const tbody = document.getElementById('history-trades-tbody');
-            const filter = document.getElementById('history-filter').value;
-            const search = document.getElementById('history-search').value.toLowerCase().trim();
 
-            let filtered = tradeHistoryData.filter(t => {
-                if (filter !== 'ALL' && t.status !== filter) return false;
-                if (search && !t.symbol.toLowerCase().includes(search)) return false;
-                return true;
-            });
-
-            if (filtered.length === 0) {
+            if (!tradeHistoryData || tradeHistoryData.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="9" class="py-8 text-center text-gray-500 italic">No matching trade history found.</td></tr>`;
                 return;
             }
 
-            tbody.innerHTML = filtered.map(t => {
+            tbody.innerHTML = tradeHistoryData.map(t => {
                 const cleanSym = t.symbol.replace('/USDT:USDT', '').replace('/USDT', '');
                 let badgeColor = 'bg-gray-800 text-gray-400 border-gray-700';
                 if (t.status === 'WON') badgeColor = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30';
@@ -722,14 +824,18 @@
                     body: JSON.stringify(payload)
                 });
                 updateModeBadge(selectedMode);
+                document.getElementById('cfg-disp-margin').textContent = '$' + payload.trade_margin + ' USDT';
+                document.getElementById('cfg-disp-leverage').textContent = payload.trade_leverage + 'x';
                 closeSettingsModal();
                 fetchDashboardStats();
+                fetchTradesData();
             } catch (err) {
                 alert("Failed to save settings: " + err);
             }
         }
 
         // Initialize and setup 10s auto-refresh polling
+        fetchSettingsConfig();
         fetchDashboardStats();
         fetchTradesData();
 

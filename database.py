@@ -139,7 +139,6 @@ def get_all_settings():
     rows = cursor.fetchall()
     conn.close()
     settings = {row['key']: row['value'] for row in rows}
-    # Mask API Secret for security when returning settings
     if settings.get('binance_api_secret'):
         settings['binance_api_secret_masked'] = '*' * (len(settings['binance_api_secret']) - 4) + settings['binance_api_secret'][-4:]
     return settings
@@ -190,7 +189,6 @@ def close_trade(trade_id, status, exit_price, pnl_pct, max_price_reached, max_pu
     now_ms = int(time.time() * 1000)
     now_utc_str = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
-    # Fetch trade details to calculate USDT PnL and update paper balance
     cursor.execute('SELECT * FROM trades WHERE id = ?', (trade_id,))
     trade = cursor.fetchone()
 
@@ -198,11 +196,9 @@ def close_trade(trade_id, status, exit_price, pnl_pct, max_price_reached, max_pu
     if trade:
         margin = trade['margin_usdt'] or 20.0
         lev = trade['leverage'] or 5
-        # Return USDT = margin * leverage * (pnl_pct / 100)
         pnl_usdt = round(margin * lev * (pnl_pct / 100.0), 2)
         exec_mode = trade['execution_mode'] or 'PAPER'
 
-        # If PAPER mode, update paper_balance in settings
         if exec_mode == 'PAPER':
             cursor.execute('SELECT value FROM settings WHERE key = "paper_balance"')
             row = cursor.fetchone()
@@ -237,18 +233,50 @@ def get_recent_signals(limit=50):
     conn.close()
     return [dict(row) for row in rows]
 
-def get_trade_history(limit=100):
+def get_trade_history_paginated(page=1, limit=25, status_filter='ALL', search=''):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute('''
+
+    offset = (page - 1) * limit
+    where_clauses = []
+    params = []
+
+    if status_filter and status_filter.upper() != 'ALL':
+        where_clauses.append('t.status = ?')
+        params.append(status_filter.upper())
+
+    if search:
+        where_clauses.append('t.symbol LIKE ?')
+        params.append(f'%{search}%')
+
+    where_sql = (' WHERE ' + ' AND '.join(where_clauses)) if where_clauses else ''
+
+    # Count total matching trades
+    count_query = f'SELECT COUNT(*) as cnt FROM trades t{where_sql}'
+    cursor.execute(count_query, params)
+    total_trades = cursor.fetchone()['cnt']
+    total_pages = max(1, (total_trades + limit - 1) // limit)
+
+    # Fetch paginated rows
+    query = f'''
         SELECT t.*, s.vol_spike, s.score, s.stars, s.status_label 
         FROM trades t
         LEFT JOIN signals s ON t.signal_id = s.id
-        ORDER BY t.id DESC LIMIT ?
-    ''', (limit,))
+        {where_sql}
+        ORDER BY t.id DESC 
+        LIMIT ? OFFSET ?
+    '''
+    cursor.execute(query, params + [limit, offset])
     rows = cursor.fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+
+    return {
+        'trades': [dict(row) for row in rows],
+        'total_trades': total_trades,
+        'total_pages': total_pages,
+        'current_page': page,
+        'limit': limit
+    }
 
 def get_dashboard_stats(days=30):
     conn = get_connection()
@@ -409,4 +437,4 @@ def get_dashboard_stats(days=30):
 
 if __name__ == '__main__':
     init_db()
-    print("Database initialized & updated for Dual-Mode & Portfolio Analytics!")
+    print("Database initialized & updated for Pagination!")
