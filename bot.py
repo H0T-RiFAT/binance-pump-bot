@@ -480,9 +480,15 @@ def background_loop():
             print(f"Scanner Loop Error: {e}")
         time.sleep(60)
 
-if __name__ == "__main__":
-    threading.Thread(target=background_loop, daemon=True).start()
+# Start background thread automatically when imported or executed
+def start_background_threads():
+    if not getattr(app, '_background_thread_started', False):
+        app._background_thread_started = True
+        threading.Thread(target=background_loop, daemon=True).start()
 
+start_background_threads()
+
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     print(f"Starting Overview Dashboard Server on port {port}...")
     app.run(host='0.0.0.0', port=port)
